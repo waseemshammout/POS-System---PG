@@ -1,0 +1,595 @@
+unit uMain;
+
+interface
+
+uses
+  System.SysUtils, System.Types, System.UITypes, System.Classes,
+  System.Variants, StrUtils, ComObj, ShellApi,
+  FMX.Types, FMX.Controls, FMX.Forms, FMX.Graphics, FMX.Dialogs, System.Rtti,
+  FMX.Grid.Style, FMX.Controls.Presentation, FMX.ScrollBox, FMX.Grid,
+  FMX.StdCtrls, FMX.Edit, FMX.Objects, System.ImageList, FMX.ImgList,
+  FireDAC.Stan.Intf, FireDAC.Stan.Option, FireDAC.Stan.Error, FireDAC.UI.Intf,
+  FireDAC.Phys.Intf, FireDAC.Stan.Def, FireDAC.Stan.Pool, FireDAC.Stan.Async,
+  FireDAC.Phys, FireDAC.FMXUI.Wait, Data.DB, FireDAC.Comp.Client,
+  FireDAC.Phys.MSAcc, FireDAC.Phys.MSAccDef, FireDAC.Stan.Param, FireDAC.DatS,
+  FireDAC.DApt.Intf, FireDAC.DApt, FireDAC.Comp.DataSet, FMX.Memo.Types,
+  FMX.Memo, Windows, Messages;
+
+type
+  TForm1 = class(TForm)
+    StyleBook1: TStyleBook;
+    StringGrid1: TStringGrid;
+    Column1: TColumn;
+    Column2: TColumn;
+    Column3: TColumn;
+    Column4: TColumn;
+    Column5: TColumn;
+    Panel1: TPanel;
+    edProduct: TEdit;
+    btnAdd: TSpeedButton;
+    ImageList1: TImageList;
+    btnDeleteItem: TButton;
+    Panel2: TPanel;
+    edSubTotal: TEdit;
+    edTax: TEdit;
+    edTotal: TEdit;
+    Label1: TLabel;
+    Label2: TLabel;
+    Label3: TLabel;
+    conn: TFDConnection;
+    qryProduct: TFDQuery;
+    Column6: TColumn;
+    tbOrders: TFDTable;
+    qryLastOrder: TFDQuery;
+    tbOrderDetails: TFDTable;
+    edPaid: TEdit;
+    Label4: TLabel;
+    edChange: TEdit;
+    Label5: TLabel;
+    StatusBar1: TStatusBar;
+    StringGrid2: TStringGrid;
+    Column7: TColumn;
+    Column8: TColumn;
+    Column9: TColumn;
+    cmdUpdateOrderValue: TFDCommand;
+    btnPrint: TButton;
+    btnSave: TButton;
+    btnNewSale: TButton;
+    btnCash: TSpeedButton;
+    btnCC: TSpeedButton;
+    edPaymentMethod: TEdit;
+    procedure edProductKeyDown(Sender: TObject; var Key: Word;
+      var KeyChar: Char; Shift: TShiftState);
+    procedure btnAddClick(Sender: TObject);
+    procedure FormCreate(Sender: TObject);
+    procedure btnDeleteItemClick(Sender: TObject);
+    procedure btnNewSaleClick(Sender: TObject);
+    procedure btnSaveClick(Sender: TObject);
+    procedure StringGrid1CellDblClick(const Column: TColumn;
+      const Row: Integer);
+    procedure StringGrid2CellDblClick(const Column: TColumn;
+      const Row: Integer);
+    procedure edPaidKeyUp(Sender: TObject; var Key: Word; var KeyChar: Char;
+      Shift: TShiftState);
+    procedure edPaidChange(Sender: TObject);
+    procedure btnCashClick(Sender: TObject);
+  private
+    { Private declarations }
+    procedure CalculateTotals();
+  public
+    { Public declarations }
+    Total, SubTotal, TotalVAT: Real;
+  end;
+
+var
+  Form1: TForm1;
+
+implementation
+
+{$R *.fmx}
+
+function GetFilledRows(): Integer;
+var
+  MaxRow, i: Integer;
+begin
+  with Form1 do
+  begin
+    MaxRow := 0;
+    for i := 0 to StringGrid1.RowCount do
+      if not StringGrid1.Cells[0, i].IsEmpty then
+        MaxRow := MaxRow + 1;
+    Result := MaxRow;
+  end;
+end;
+
+procedure GenerateHTMLFile(const FileName: string);
+var
+  HTMLContent: TStringList;
+begin
+  // Create TStringList to store HTML content
+  HTMLContent := TStringList.Create;
+  try
+    // Add HTML content to the string list
+    HTMLContent.Add('<!DOCTYPE html>');
+    HTMLContent.Add('<html>');
+    HTMLContent.Add('<head>');
+    HTMLContent.Add('<title>Invoice</title>');
+    HTMLContent.Add('</head>');
+    HTMLContent.Add('<body>');
+    HTMLContent.Add('<h1>Invoice No. 51011</h1>');
+    HTMLContent.Add('<p>This is a generated HTML file.</p>');
+    HTMLContent.Add('</body>');
+    HTMLContent.Add('</html>');
+    // Save the content to the specified file
+    HTMLContent.SaveToFile(FileName);
+  finally
+    // Free the TStringList
+    HTMLContent.Free;
+  end;
+end;
+
+procedure TForm1.CalculateTotals();
+var
+  i: Integer;
+  MaxRow, ProductID: Integer;
+  ProductQuantity, ProductPriceExVAT, ProductAmount: Real;
+  FinalSubTotal, FinalVat, FinalTotal, ChangeAmount: Real;
+begin
+  // Loop through the rows of StringGrid
+  MaxRow := GetFilledRows();
+  for i := 0 to MaxRow - 1 do
+  begin
+    with qryProduct do
+    begin
+      Close;
+      ProductID := StrToInt(StringGrid1.Cells[0, i]);
+      SQL.Text := 'Select * From Products Where ProductID = ' +
+        IntToStr(ProductID);
+      Open;
+      ProductQuantity := StrToFloat(StringGrid1.Cells[2, i]);
+      ProductPriceExVAT := FieldByName('UnitPrice').Value /
+        (1 + FieldByName('VAT').Value);
+      ProductAmount := ProductQuantity * FieldByName('UnitPrice').Value;
+      Close;
+    end;
+    SubTotal := SubTotal + (ProductPriceExVAT * ProductQuantity) - SubTotal;
+    FinalSubTotal := FinalSubTotal + SubTotal;
+    FinalTotal := FinalTotal + ProductAmount;
+    ChangeAmount := FinalTotal - edPaid.Text.ToSingle;
+  end;
+  edSubTotal.Text := FormatFloat('#0.00', FinalSubTotal);
+  edTotal.Text := FormatFloat('#0.00', FinalTotal);
+  FinalVat := FinalTotal - FinalSubTotal;
+  edTax.Text := FormatFloat('#0.00', FinalVat);
+  edChange.Text := FormatFloat('#0.00', ChangeAmount);
+end;
+
+procedure TForm1.btnNewSaleClick(Sender: TObject);
+begin
+  if FMX.Dialogs.MessageDlg
+    ('This will reset the current list of items in the basket, to continue press Yes otherwise press no.',
+    TMsgDlgType.mtConfirmation, mbYesNo, 0) = mrYes then
+  begin
+    StringGrid1.RowCount := 0;
+    StringGrid1.RowCount := 50;
+    edSubTotal.Text := '0.00';
+    edTax.Text := '0.00';
+    edTotal.Text := '0.00';
+    edPaid.Text := '0.00';
+    edChange.Text := '0.00';
+  end;
+end;
+
+{
+  procedure TForm1.btnPrintClick(Sender: TObject);
+  var
+  WordApp, Doc, Range : Variant;
+  TemplatePath, SavePath: string;
+  RowIndex: Integer;
+  ProductName: string;
+  Quantity: Real;
+  UnitPrice: Real;
+  Vat: Real;
+  VatStr: string;
+  LineValue: Real;
+  InvoiceNo: Integer;
+  SubTotal, TotalTax, Total: Real;
+  begin
+  if MessageDlg('This will save the invoice, would you like to proceed?', TMsgDlgType.mtWarning, mbYesNo, 0) <> mrYes then
+  exit
+  else
+  begin
+  // btnSaveClick(Sender);
+  with qryLastOrder do
+  begin
+  Open;
+  InvoiceNo := FieldByName('LastOrderID').Value;
+  Close;
+  end;
+  // Set the path to your Word template file
+  TemplatePath :=
+  'D:\Waseem\Projects\All Project\Delphi_desktop\POS System\Invoice\InvoiceTemplate.docx';
+  WordApp := CreateOleObject('Word.Application');
+  // Create instance of Word application
+  WordApp.Visible := False; // Show Word application (optional)
+  Doc := WordApp.Documents.Add(TemplatePath);
+  // Add a new document based on the template
+  Range := Doc.Range; // Access the content of the document
+
+  for RowIndex := 1 to GetFilledRows() do // Fill Line Items tables
+  begin
+  if RowIndex > 1 then
+  Doc.Tables.Item(2).Rows.Add;
+
+  ProductName := StringGrid1.Cells[1, RowIndex - 1];
+  Quantity := StringGrid1.Cells[2, RowIndex - 1].ToSingle;
+  UnitPrice := StringGrid1.Cells[3, RowIndex - 1].ToSingle;
+  VatStr := StringGrid1.Cells[4, RowIndex - 1];
+  Vat := StrToFloat(StringReplace(VatStr, '%', '',
+  [rfReplaceAll, rfIgnoreCase])) / 100;
+  LineValue := UnitPrice * Quantity;
+
+  Doc.Tables.Item(2).Cell(RowIndex + 1, 1).Range.Text := RowIndex.ToString;
+  Doc.Tables.Item(2).Cell(RowIndex + 1, 2).Range.Text := ProductName;
+  Doc.Tables.Item(2).Cell(RowIndex + 1, 3).Range.Text :=
+  FormatFloat('#0.00', Quantity);
+  Doc.Tables.Item(2).Cell(RowIndex + 1, 4).Range.Text :=
+  FormatFloat('#0.00', UnitPrice);
+  Doc.Tables.Item(2).Cell(RowIndex + 1, 5).Range.Text := VatStr;
+  Doc.Tables.Item(2).Cell(RowIndex + 1, 6).Range.Text :=
+  FormatFloat('#0.00', LineValue);
+
+  SubTotal := SubTotal + (LineValue / (1 + Vat));
+  Total := Total + LineValue;
+  TotalTax := Total - SubTotal;
+  end;
+
+  Doc.Tables.Item(1).Cell(2, 3).Range.Text := DateToStr(Date);
+  Doc.Tables.Item(1).Cell(3, 3).Range.Text := TimeToStr(Time);
+  Doc.Tables.Item(1).Cell(4, 3).Range.Text := IntToStr(InvoiceNo);
+
+  Doc.Tables.Item(3).Cell(1, 3).Range.Text := FormatFloat('#0.00', SubTotal);
+  Doc.Tables.Item(3).Cell(2, 3).Range.Text := FormatFloat('#0.00', TotalTax);
+  Doc.Tables.Item(3).Cell(3, 3).Range.Text := FormatFloat('#0.00', Total);
+
+  SavePath := 'C:\Users\Waseem\Desktop\Invoice.pdf';
+  // pdf file location to be saved in
+  Doc.ExportAsFixedFormat(SavePath, 17); // Execute SaveAs pdf action
+
+  // free the memory
+  Doc.Close(False); // False = don't save
+  WordApp.Quit;
+  Beep(0, 0);
+  //    btnSave.Enabled := False;
+  //    btnAdd.Enabled := False;
+  //    btnDeleteItem.Enabled := False;
+  //    btnNewSale.Enabled := True;
+
+  ShellExecute(0, 'open', PChar(SavePath), nil, nil, SW_SHOWNORMAL);
+  end;
+  end;
+}
+{
+  procedure Html();
+  var
+  SomeTxtFile : TextFile;
+  FileName : string;
+  buffer : string;
+  LineNo : integer;
+  begin
+  //   GenerateHTMLFile('C:\Users\Waseem\Desktop\InvoiceNo51101.html');
+  LineNo := 0;
+  FileName := 'C:\Users\Waseem\Desktop\POS System\Invoice\Modern-Word-Invoice-Template.htm';
+  AssignFile(SomeTxtFile, FileName);
+  Reset(SomeTxtFile);
+  while not EOF(SomeTxtFile) do
+  begin
+  ReadLn(SomeTxtFile, buffer);
+  LineNo := LineNo + 1;
+  //    Memo1.Lines.Add(buffer);
+  //    Memo1.Lines.Add(LineNo.ToString + ', ' + buffer);
+  end;
+  CloseFile(SomeTxtFile) ;
+  end;
+}
+
+{
+  procedure GenerateWord();
+  var
+  WordApp: Variant;
+  Doc: Variant;
+  Range: Variant;
+  Table: Variant;
+  RowIndex: Integer;
+  ProductName: String;
+  UnitPrice: Real;
+  Quantity: Real;
+  VatStr: string;
+  LineValue: Real;
+  begin
+  WordApp := CreateOleObject('Word.Application');
+  WordApp.Visible := True;
+  Doc := WordApp.Documents.Add;
+  Range := Doc.Range;
+  // Add a table with rows & columns
+  Table := Doc.Tables.Add(Range, 1, 6);
+  // Range.Text := 'Hello, World!';
+  Table.Cell(0, 1).Range.Text := '#';
+  Table.Cell(0, 2).Range.Text := 'Description';
+  Table.Cell(0, 3).Range.Text := 'Quantity';
+  Table.Cell(0, 4).Range.Text := 'Unit Price';
+  Table.Cell(0, 5).Range.Text := 'VAT';
+  Table.Cell(0, 6).Range.Text := 'Amount';
+
+  for RowIndex := 1 to GetFilledRows() do
+  begin
+  Table.Rows.Add;
+
+  ProductName := StringGrid1.Cells[1, RowIndex - 1];
+  Quantity := StringGrid1.Cells[2, RowIndex - 1].ToSingle;
+  UnitPrice := StringGrid1.Cells[3, RowIndex - 1].ToSingle;
+  VatStr := StringGrid1.Cells[4, RowIndex - 1];
+  LineValue := UnitPrice * Quantity;
+
+  Table.Cell(RowIndex + 1, 1).Range.Text := IntToStr(RowIndex);
+  Table.Cell(RowIndex + 1, 2).Range.Text := ProductName;
+  Table.Cell(RowIndex + 1, 3).Range.Text := FloatToStr(Quantity);
+  Table.Cell(RowIndex + 1, 4).Range.Text := FloatToStr(UnitPrice);
+  Table.Cell(RowIndex + 1, 5).Range.Text := VatStr;
+  Table.Cell(RowIndex + 1, 6).Range.Text := FloatToStr(LineValue);
+  end;
+
+  Doc.SaveAs('C:\Users\Waseem\Desktop\Invoice.docx');
+  Doc.Close;
+  WordApp.Quit;
+  end;
+}
+
+procedure TForm1.btnSaveClick(Sender: TObject);
+var
+  OrderID: Integer;
+  ProductID: Integer;
+  UnitPrice: Real;
+  Quantity: Real;
+  Vat: Real;
+  LineValue: Real;
+  i: Integer;
+  VatStr: string;
+begin
+  if GetFilledRows < 1 then
+    exit;
+  if MessageDlg('Are you sure you want to post the order?',
+    TMsgDlgType.mtConfirmation, mbYesNo, 0) = mrYes then
+  begin
+    // Create Order Header
+    with tbOrders do
+    begin
+      Open;
+      Insert;
+      FieldByName('CustomerID').Value := 0;
+      FieldByName('EmployeeID').Value := 0;
+      FieldByName('OrderDate').Value := Now;
+      FieldByName('OrderAmount').Value := edSubTotal.Text;
+      FieldByName('VAT').Value := edTax.Text;
+      FieldByName('PaymentMethod').Value := edPaymentMethod.Text;
+      Post;
+    end;
+    // Get the last Order ID
+    with qryLastOrder do
+    begin
+      Open;
+      OrderID := FieldByName('LastOrderID').Value;
+      Close;
+    end;
+    // Insert the order lines
+    for i := 0 to GetFilledRows() - 1 do
+    begin
+      ProductID := StringGrid1.Cells[0, i].ToInteger;
+      UnitPrice := StringGrid1.Cells[3, i].ToSingle;
+      Quantity := StringGrid1.Cells[2, i].ToSingle;
+      VatStr := StringGrid1.Cells[4, i];
+      Vat := StringReplace(VatStr, '%', '', [rfReplaceAll, rfIgnoreCase]
+        ).ToSingle;
+      LineValue := UnitPrice * Quantity;
+      with tbOrderDetails do
+      begin
+        Open;
+        Insert;
+        FieldByName('OrderID').Value := OrderID;
+        FieldByName('ProductID').Value := ProductID;
+        FieldByName('UnitPrice').Value := UnitPrice;
+        FieldByName('Quantity').Value := Quantity;
+        FieldByName('Discount').Value := 0;
+        FieldByName('Vat').Value := Vat / 100;
+        FieldByName('LineValue').Value := LineValue;
+        Post;
+      end;
+    end;
+    // Reset screen
+    StringGrid1.RowCount := 0;
+    StringGrid1.RowCount := 50;
+    edSubTotal.Text := '0.00';
+    edTax.Text := '0.00';
+    edTotal.Text := '0.00';
+    edPaid.Text := '0.00';
+    edChange.Text := '0.00';
+    edPaymentMethod.Text := '';
+  end;
+//  System.SysUtils.Beep;
+end;
+
+procedure TForm1.btnDeleteItemClick(Sender: TObject);
+var
+  RowIndex: Integer;
+  i, j: Integer;
+begin
+  RowIndex := StringGrid1.Row;
+  if (RowIndex >= 0) and (RowIndex < StringGrid1.RowCount) then
+  Begin
+    for i := RowIndex to StringGrid1.RowCount - 2 do
+      for j := 0 to 5 do
+        StringGrid1.Cells[j, i] := StringGrid1.Cells[j, i + 1];
+    for j := 0 to 5 do
+      StringGrid1.Cells[j, StringGrid1.RowCount - 1] := '';
+    StringGrid1.RowCount := StringGrid1.RowCount - 1;
+    CalculateTotals();
+  End;
+end;
+
+procedure TForm1.edPaidChange(Sender: TObject);
+begin
+  edPaid.Text := FormatFloat('#0.00', edPaid.Text.ToSingle);
+end;
+
+procedure TForm1.edPaidKeyUp(Sender: TObject; var Key: Word; var KeyChar: Char;
+  Shift: TShiftState);
+begin
+//  if not(KeyChar in ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '.'])
+//  then
+//  begin
+//    KeyChar := '0';
+//    exit;
+//  end;
+//  edChange.Text := FormatFloat('#0.00',
+//    (edTotal.Text.ToSingle - edPaid.Text.ToSingle));
+end;
+
+procedure TForm1.edProductKeyDown(Sender: TObject; var Key: Word;
+  var KeyChar: Char; Shift: TShiftState);
+begin
+  if Key = vkReturn then
+    btnAddClick(Sender);
+end;
+
+procedure TForm1.FormCreate(Sender: TObject);
+var
+  i: Integer;
+begin
+  with qryProduct do
+  begin
+    Close;
+    SQL.Text := 'Select * From Products Where TouchFlag = -1';
+    Open;
+    StringGrid2.RowCount := qryProduct.RecordCount;
+    i := 0;
+    while not eof do
+    begin
+      StringGrid2.Cells[0, i] := FieldByName('Barcode').AsString;
+      StringGrid2.Cells[1, i] := FieldByName('ProductName').AsString;
+      StringGrid2.Cells[2, i] := FieldByName('UnitPrice').AsString;
+      i := i + 1;
+      Next;
+    end;
+    Close;
+  end;
+
+  edProduct.SetFocus;
+end;
+
+procedure TForm1.btnCashClick(Sender: TObject);
+var
+  Input: string;
+begin
+  Try
+    Input := FMX.Dialogs.InputBox('Cash Receipt',
+      'Enter Cash amount paid by customer...', '0');
+    if VarIsNumeric(StrToFloat(Input)) then
+    begin
+      edPaid.Text := Input;
+      edChange.Text := FormatFloat('#0.00',
+        (edTotal.Text.ToSingle - edPaid.Text.ToSingle));
+    end;
+    edPaymentMethod.Text := 'CSH';
+  Except
+    on E: Exception do
+    if POS('is not a valid', e.Message) <> 0 then ShowMessage('Please enter only numbers!');
+  End;
+end;
+
+procedure TForm1.StringGrid1CellDblClick(const Column: TColumn;
+  const Row: Integer);
+var
+  Qty, Price, Amount: Real;
+begin
+  if StringGrid1.Cells[2, StringGrid1.Row] = '' then
+    exit;
+
+  Qty := FMX.Dialogs.InputBox('Quantity Title', 'Enter Quantity',
+    StringGrid1.Cells[2, StringGrid1.Row]).ToSingle;
+  StringGrid1.Cells[2, StringGrid1.Row] := FormatFloat('#0.00', Qty);
+  Price := StrToFloat(StringGrid1.Cells[3, StringGrid1.Row]);
+  Amount := Qty * Price;
+  StringGrid1.Cells[5, StringGrid1.Row] := FormatFloat('#0.00', Amount);
+  CalculateTotals;
+end;
+
+procedure TForm1.StringGrid2CellDblClick(const Column: TColumn;
+  const Row: Integer);
+begin
+  edProduct.Text := StringGrid2.Cells[0, StringGrid2.Row];
+  btnAddClick(Self);
+end;
+
+procedure TForm1.btnAddClick(Sender: TObject);
+var
+  C, R: Integer;
+  ProductID: Integer;
+  ProductName, ProductBarcode: string;
+  ProductQuantity, ProductPrice, ProductVAT, ProductAmount: Real;
+begin
+  if edProduct.Text.IsEmpty then
+    exit;
+  // Reset old values
+  ProductID := 0;
+  ProductBarcode := '';
+  ProductName := '';
+  ProductQuantity := 0;
+  ProductPrice := 0;
+  ProductVAT := 0;
+  ProductAmount := 0;
+  // Look for that product in db and populate the vars
+  with qryProduct do
+  begin
+    SQL.Text := 'Select * From Products Where Barcode = ' +
+      QuotedStr(edProduct.Text);
+    Open;
+    if eof then
+    begin
+      Beep(3000, 150);
+      exit;
+    end
+    else
+    begin
+      ProductID := FieldByName('ProductID').Value;
+      ProductName := FieldByName('ProductName').Value;
+      ProductQuantity := 1;
+      ProductPrice := FieldByName('UnitPrice').Value;
+      ProductVAT := FieldByName('VAT').Value;
+      ProductAmount := ProductQuantity * ProductPrice;
+    end;
+  end;
+  // How many rows are filled so far in the basket?
+  R := GetFilledRows();
+  // add the new row right after the last one
+  for C := 0 to 5 do
+    case C of
+      0:
+        StringGrid1.Cells[C, R] := IntToStr(ProductID);
+      1:
+        StringGrid1.Cells[C, R] := ProductName;
+      2:
+        StringGrid1.Cells[C, R] := FormatFloat('#0.00', ProductQuantity);
+      3:
+        StringGrid1.Cells[C, R] := FormatFloat('#0.00', ProductPrice);
+      4:
+        StringGrid1.Cells[C, R] := FormatFloat('0.%', ProductVAT * 100);
+      5:
+        StringGrid1.Cells[C, R] := FormatFloat('#0.00', ProductAmount);
+    end;
+  // reset search field
+  edProduct.Text := '';
+  CalculateTotals();
+  Beep(2000, 100);
+end;
+
+end.
